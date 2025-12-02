@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
+from io import BytesIO
 from docx import Document
+import re
+from docxtpl import DocxTemplate
+import zipfile
 
 # ------------------------
 # Funciones auxiliares
@@ -34,8 +38,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📄 Generador de documentos judiciales – Fase 1")
-st.caption("Paso 1: Cargar base en Excel y plantilla en Word con previsualización básica.")
+st.title("📄 Generador de documentos judiciales")
+st.caption("Fase inicial: combinar base en Excel + plantilla Word usando placeholders {{...}}.")
 
 # Estado de sesión
 if "df_base" not in st.session_state:
@@ -44,16 +48,25 @@ if "df_base" not in st.session_state:
 if "parrafos_plantilla" not in st.session_state:
     st.session_state.parrafos_plantilla = None
 
+if "plantilla_bytes" not in st.session_state:
+    st.session_state.plantilla_bytes = None
+
+if "mapeo_placeholders" not in st.session_state:
+    st.session_state.mapeo_placeholders = {}
+
+if "resultados_docx" not in st.session_state:
+    st.session_state.resultados_docx = None
+
 col1, col2 = st.columns(2)
 
 # ------------------------
-# Panel izquierdo: cargar Excel
+# PASO 1: Cargar Excel
 # ------------------------
 with col1:
     st.subheader("① Cargar base de datos (Excel)")
 
     archivo_excel = st.file_uploader(
-        "Sube la base en Excel (.xlsx):",
+        "Sube la base en Excel (.xlsx o .xls):",
         type=["xlsx", "xls"],
         key="uploader_excel"
     )
@@ -73,7 +86,7 @@ with col1:
             st.write(list(df.columns))
 
 # ------------------------
-# Panel derecho: cargar Word
+# PASO 2: Cargar Word
 # ------------------------
 with col2:
     st.subheader("② Cargar plantilla (Word)")
@@ -90,6 +103,9 @@ with col2:
             st.error(error)
         else:
             st.session_state.parrafos_plantilla = parrafos
+            # Guardamos los bytes de la plantilla para usarlos al generar los .docx
+            st.session_state.plantilla_bytes = archivo_word.getvalue()
+
             st.success("Plantilla Word cargada correctamente.")
 
             st.markdown("**Vista previa de los párrafos (solo texto):**")
@@ -103,7 +119,7 @@ st.markdown("---")
 st.subheader("Estado general")
 
 if st.session_state.df_base is not None:
-    st.success("✅ Base de datos cargada.")
+    st.success("✅ Base de datos (Excel) cargada.")
 else:
     st.warning("⚠️ Aún no has cargado la base de datos (Excel).")
 
@@ -112,12 +128,9 @@ if st.session_state.parrafos_plantilla is not None:
 else:
     st.warning("⚠️ Aún no has cargado la plantilla (Word).")
 
-st.info("En el siguiente paso vamos a empezar el marcado de campos (JUZGADO, DEMANDANTE, etc.) sobre esta plantilla.")
 # ------------------------
 # PASO 3: Marcado de campos ({{...}}) + previsualización
 # ------------------------
-import re
-import pandas as pd  # ya lo tienes arriba, pero no pasa nada si se repite
 
 st.markdown("---")
 st.header("③ Marcado de campos en la plantilla y previsualización")
@@ -243,3 +256,113 @@ else:
         st.markdown(f"**Párrafo {i}:**")
         st.write(texto)
 
+# ------------------------
+# PASO 4: Generación de documentos .docx
+# ------------------------
+
+st.markdown("---")
+st.header("④ Generación de documentos (.docx)")
+
+# Verificaciones previas
+if st.session_state.df_base is None or st.session_state.parrafos_plantilla is None:
+    st.warning("Carga primero la base de datos y la plantilla.")
+    st.stop()
+
+if st.session_state.plantilla_bytes is None:
+    st.warning("No se encontró la plantilla original en memoria. Vuelve a cargar el archivo Word.")
+    st.stop()
+
+if "mapeo_placeholders" not in st.session_state or not st.session_state.mapeo_placeholders:
+    st.warning("Primero debes vincular las variables {{...}} a columnas de la base en el paso ③.")
+    st.stop()
+
+df = st.session_state.df_base
+mapeo = st.session_state.mapeo_placeholders
+
+st.write("Con la configuración actual se generará un documento por cada fila de la base de datos.")
+
+# Pequeña ayuda para el nombre de archivo
+st.markdown("### Regla básica de nombres de archivo")
+st.caption(
+    "Por ahora usamos una regla simple: si existen columnas como RADICADO y DEMANDADO "
+    "las incluimos en el nombre. Si no, usamos un consecutivo."
+)
+
+col_a, col_b = st.columns(2)
+with col_a:
+    incluir_radicado = st.checkbox("Incluir RADICADO en el nombre (si existe)", value=True)
+with col_b:
+    incluir_demandado = st.checkbox("Incluir DEMANDADO en el nombre (si existe)", value=True)
+
+# Botón para generar documentos
+if st.button("▶️ Generar documentos .docx"):
+    plantilla_bytes = st.session_state.plantilla_bytes
+
+    buffer_zip = BytesIO()
+    zf = zipfile.ZipFile(buffer_zip, "w", zipfile.ZIP_DEFLATED)
+
+    resultados = []
+    progreso = st.progress(0)
+    total = len(df)
+
+    for idx, (_, fila) in enumerate(df.iterrows(), start=1):
+        # Construimos el contexto para docxtpl: placeholder -> valor
+        contexto = {}
+        for ph, col in mapeo.items():
+            if col in df.columns:
+                valor = fila[col]
+                if pd.isna(valor):
+                    valor = ""
+                contexto[ph] = str(valor)
+            else:
+                contexto[ph] = ""
+
+        # Cargamos la plantilla desde memoria en cada iteración
+        doc = DocxTemplate(BytesIO(plantilla_bytes))
+        doc.render(contexto)
+
+        # Construimos el nombre del archivo
+        partes_nombre = ["doc"]
+        if incluir_radicado and "RADICADO" in df.columns:
+            partes_nombre.append(str(fila["RADICADO"]))
+        if incluir_demandado and "DEMANDADO" in df.columns:
+            partes_nombre.append(str(fila["DEMANDADO"]))
+
+        # Si no tenemos nada extra, usamos el índice
+        if len(partes_nombre) == 1:
+            partes_nombre.append(str(idx))
+
+        nombre_archivo = "_".join(partes_nombre) + ".docx"
+
+        # Guardamos en un buffer temporal
+        doc_buffer = BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)
+
+        # Añadimos al ZIP
+        zf.writestr(nombre_archivo, doc_buffer.read())
+
+        resultados.append({
+            "fila": idx,
+            "nombre_archivo": nombre_archivo
+        })
+
+        progreso.progress(idx / total)
+
+    zf.close()
+    buffer_zip.seek(0)
+
+    st.success(f"Se generaron {len(resultados)} documentos .docx.")
+
+    st.markdown("### Ejemplo de archivos generados:")
+    st.dataframe(pd.DataFrame(resultados).head(10))
+
+    st.download_button(
+        label="⬇️ Descargar todos los documentos (.zip)",
+        data=buffer_zip.getvalue(),
+        file_name="documentos_generados.docx.zip",
+        mime="application/zip"
+    )
+
+    # Guardamos el resumen en sesión por si lo necesitamos luego (para correos)
+    st.session_state.resultados_docx = resultados
