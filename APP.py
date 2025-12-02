@@ -113,3 +113,62 @@ else:
     st.warning("⚠️ Aún no has cargado la plantilla (Word).")
 
 st.info("En el siguiente paso vamos a empezar el marcado de campos (JUZGADO, DEMANDANTE, etc.) sobre esta plantilla.")
+# ------------------------
+# PASO 3: Marcado de campos
+# ------------------------
+
+st.markdown("---")
+st.header("③ Marcado de campos en la plantilla")
+
+# Verificamos que ambos estén cargados
+if st.session_state.df_base is None or st.session_state.parrafos_plantilla is None:
+    st.warning("Carga primero la base de datos y la plantilla.")
+    st.stop()
+
+# Inicializamos estructura de mapeo si no existe
+if "mapeo_campos" not in st.session_state:
+    st.session_state.mapeo_campos = []
+
+df = st.session_state.df_base
+parrafos = st.session_state.parrafos_plantilla
+
+st.write("Selecciona qué párrafos quieres vincular a datos de la base.")
+
+# Listado editable de párrafos
+for idx, p in enumerate(parrafos):
+    with st.expander(f"Párrafo {idx+1}"):
+        st.markdown(f"### Contenido del párrafo:")
+        st.write(p)
+
+        st.markdown("### Vincular este párrafo a un campo de la base:")
+        col = st.selectbox(
+            f"Selecciona el campo para el párrafo {idx+1}:",
+            options=["(No vincular)"] + list(df.columns),
+            key=f"select_parrafo_{idx}"
+        )
+
+        if col != "(No vincular)":
+            # Guardar mapeo
+            mapeo = {
+                "parrafo_id": idx,
+                "texto_original": p,
+                "columna_excel": col,
+                "etiqueta_visual": col.replace("_", " ").title(),
+            }
+
+            # Actualizar si ya existía
+            actualizado = False
+            for i, m in enumerate(st.session_state.mapeo_campos):
+                if m["parrafo_id"] == idx:
+                    st.session_state.mapeo_campos[i] = mapeo
+                    actualizado = True
+                    break
+
+            if not actualizado:
+                st.session_state.mapeo_campos.append(mapeo)
+
+st.success("Mapeo actualizado correctamente.")
+
+st.markdown("### 📝 Resumen de campos vinculados")
+st.write(st.session_state.mapeo_campos)
+
