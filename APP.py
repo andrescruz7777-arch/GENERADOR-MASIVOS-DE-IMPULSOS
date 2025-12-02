@@ -703,5 +703,21 @@ if st.button("➡️ Enviar correo de prueba"):
             filename=nombre_pdf
         )
 
-        with smtplib.SM
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+
+        st.success(
+            f"Correo de prueba enviado a: {para_list}. "
+            f"Con copia: {cc_list}. BCC: {bcc_list}."
+        )
+
+        st.code(
+            f"Asunto: {asunto_final}\n\n{cuerpo_final}",
+            language="text"
+        )
+
+    except Exception as e:
+        st.error(f"❌ Error enviando correo: {e}")
 
