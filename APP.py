@@ -423,3 +423,104 @@ if st.button("▶️ Generar documentos .docx"):
 
     # Guardamos el resumen en sesión por si lo necesitamos luego (para correos)
     st.session_state.resultados_docx = resultados
+# ------------------------
+# PASO 5: Cargar PDFs generados externamente y mapearlos
+# ------------------------
+st.markdown("---")
+st.header("⑤ Cargar PDFs convertidos y asociarlos a cada registro")
+
+if "resultados_pdf" not in st.session_state:
+    st.session_state.resultados_pdf = None
+
+# Verificaciones básicas
+if st.session_state.df_base is None:
+    st.warning("Carga primero la base de datos (Excel).")
+    st.stop()
+
+df = st.session_state.df_base
+mapeo = st.session_state.mapeo_placeholders
+plantilla_bytes = st.session_state.plantilla_bytes
+regla_nombre = st.session_state.regla_nombre_archivo
+
+st.write(
+    "Después de generar los .docx y convertirlos a PDF por fuera, "
+    "sube aquí un archivo .zip con todos los PDF. "
+    "Los nombres de los PDF deben seguir la misma regla que usaste para los .docx, "
+    "por ejemplo: **Memorial_{{RADICADO}}_{{DEMANDADO}}.pdf**"
+)
+
+zip_pdfs = st.file_uploader(
+    "Sube el archivo ZIP con todos los PDF:",
+    type=["zip"],
+    key="uploader_zip_pdfs"
+)
+
+pdf_mapping = []
+
+if zip_pdfs is not None:
+    # Leemos el ZIP en memoria
+    zip_bytes = zip_pdfs.read()
+    zf_pdf = zipfile.ZipFile(BytesIO(zip_bytes), "r")
+
+    nombres_archivos_zip = zf_pdf.namelist()
+    st.write("Archivos detectados dentro del ZIP:")
+    st.write(nombres_archivos_zip)
+
+    # Detectamos placeholders del nombre (los mismos que en el paso 4)
+    placeholders_nombre = re.findall(r"{{\s*([^}]+?)\s*}}", regla_nombre)
+
+    # Recorremos cada fila del DF y calculamos el nombre de PDF esperado
+    for idx, (_, fila) in enumerate(df.iterrows(), start=1):
+        nombre_esperado = regla_nombre
+
+        # Reemplazamos placeholders en el nombre usando mapeo o columna directa
+        for ph in placeholders_nombre:
+            if ph in mapeo and mapeo[ph] in df.columns:
+                col = mapeo[ph]
+            elif ph in df.columns:
+                col = ph
+            else:
+                col = None
+
+            if col is not None:
+                valor = fila[col]
+                if pd.isna(valor):
+                    valor = ""
+                patron = r"{{\s*" + re.escape(ph) + r"\s*}}"
+                nombre_esperado = re.sub(patron, str(valor), nombre_esperado)
+            else:
+                patron = r"{{\s*" + re.escape(ph) + r"\s*}}"
+                nombre_esperado = re.sub(patron, "", nombre_esperado)
+
+        # Ajustamos extensión a .pdf
+        nombre_esperado = nombre_esperado.replace(".docx", "").replace(".DOCX", "")
+        if not nombre_esperado.lower().endswith(".pdf"):
+            nombre_esperado = nombre_esperado + ".pdf"
+
+        # Buscamos si ese archivo existe en el ZIP (match exacto, case-sensitive simple)
+        encontrado = nombre_esperado in nombres_archivos_zip
+
+        pdf_mapping.append({
+            "fila": idx,
+            "nombre_esperado": nombre_esperado,
+            "encontrado": encontrado
+        })
+
+    mapping_df = pd.DataFrame(pdf_mapping)
+
+    st.markdown("### Resultado del mapeo PDFs ↔ base")
+    st.dataframe(mapping_df)
+
+    faltantes = mapping_df[~mapping_df["encontrado"]]
+    if len(faltantes) > 0:
+        st.warning(
+            f"Hay {len(faltantes)} registros sin PDF encontrado. "
+            "Verifica que los nombres en el ZIP coincidan con la regla."
+        )
+    else:
+        st.success("Todos los registros tienen un PDF asociado en el ZIP.")
+
+    # Guardamos en sesión: el zip original y el mapping
+    st.session_state.pdf_zip_bytes = zip_bytes
+    st.session_state.pdf_mapping = pdf_mapping
+
