@@ -523,4 +523,157 @@ if zip_pdfs is not None:
     # Guardamos en sesión: el zip original y el mapping
     st.session_state.pdf_zip_bytes = zip_bytes
     st.session_state.pdf_mapping = pdf_mapping
+# ------------------------
+# PASO 6: Configuración de correo y envío de prueba
+# ------------------------
+import smtplib
+from email.message import EmailMessage
+
+st.markdown("---")
+st.header("⑥ Configuración de correo y envío de prueba")
+
+if "pdf_zip_bytes" not in st.session_state or "pdf_mapping" not in st.session_state:
+    st.info("Primero carga el ZIP con los PDFs en el paso ⑤ para poder adjuntarlos en correos.")
+    st.stop()
+
+df = st.session_state.df_base
+pdf_zip_bytes = st.session_state.pdf_zip_bytes
+pdf_mapping = st.session_state.pdf_mapping
+
+# ------------------------
+# Configuración SMTP
+# ------------------------
+st.subheader("Configuración SMTP (servidor de correo)")
+
+smtp_host = st.text_input("Servidor SMTP (host):", value="smtp.gmail.com")
+smtp_port = st.number_input("Puerto SMTP:", value=587, step=1)
+smtp_user = st.text_input("Usuario / correo remitente:")
+smtp_pass = st.text_input("Contraseña / app password:", type="password")
+from_name = st.text_input("Nombre que verá el destinatario:", value="Área Judicial")
+from_email = st.text_input("Correo FROM (si es distinto al usuario):", value="")
+
+if from_email.strip() == "":
+    from_email = smtp_user
+
+st.caption("Usa un correo con permisos SMTP (por ejemplo, Gmail con app password o un buzón corporativo).")
+
+# ------------------------
+# Plantilla de correo (asunto y cuerpo)
+# ------------------------
+st.subheader("Plantilla de correo (uso de variables {{...}})")
+
+asunto_template = st.text_input(
+    "Asunto del correo (puedes usar {{RADICADO}}, {{DEMANDADO}}, etc.):",
+    value="Memorial proceso {{RADICADO}} contra {{DEMANDADO}}"
+)
+
+cuerpo_template = st.text_area(
+    "Cuerpo del correo:",
+    value=(
+        "Señor(a) {{JUZGADO}},\n\n"
+        "Adjunto remito el memorial correspondiente al proceso {{RADICADO}} "
+        "seguido por {{DEMANDANTE}} contra {{DEMANDADO}}.\n\n"
+        "Cordialmente,\n"
+        "{{ABOGADO}}\n"
+        "{{TARJETA_PROFESIONAL}}"
+    ),
+    height=200
+)
+
+st.caption("Las variables funcionan igual que en la plantilla: se reemplazan con los datos de cada fila.")
+
+# ------------------------
+# Envío de prueba
+# ------------------------
+st.subheader("Envío de prueba (solo un registro)")
+
+total_filas = len(df)
+fila_prueba = st.number_input(
+    "Fila de la base a usar para la prueba (1 = primera fila):",
+    min_value=1,
+    max_value=total_filas,
+    value=1,
+    step=1
+)
+
+correo_prueba = st.text_input("Enviar prueba a este correo:")
+
+def construir_asunto_y_cuerpo(fila):
+    texto_asunto = asunto_template
+    texto_cuerpo = cuerpo_template
+
+    # Reemplazamos usando columnas del DF (nombre de columna = placeholder)
+    for col in df.columns:
+        ph = col  # asumimos placeholder igual al nombre de la columna
+        valor = fila[col]
+        if pd.isna(valor):
+            valor = ""
+        patron = r"{{\s*" + re.escape(ph) + r"\s*}}"
+        texto_asunto = re.sub(patron, str(valor), texto_asunto)
+        texto_cuerpo = re.sub(patron, str(valor), texto_cuerpo)
+
+    return texto_asunto, texto_cuerpo
+
+def obtener_pdf_para_fila(idx_fila):
+    # idx_fila viene 1-based, mapping también
+    esperado = None
+    encontrado = False
+    nombre_zip = None
+
+    for item in pdf_mapping:
+        if item["fila"] == idx_fila:
+            esperado = item["nombre_esperado"]
+            encontrado = item["encontrado"]
+            break
+
+    if not encontrado or esperado is None:
+        return None, None, False
+
+    # Abrimos el ZIP y extraemos ese archivo
+    zf_pdf = zipfile.ZipFile(BytesIO(pdf_zip_bytes), "r")
+    try:
+        data = zf_pdf.read(esperado)
+        return esperado, data, True
+    except KeyError:
+        return esperado, None, False
+
+if st.button("📨 Enviar correo de prueba"):
+    if not smtp_host or not smtp_user or not smtp_pass:
+        st.error("Configura primero SMTP (host, usuario y contraseña).")
+    elif not correo_prueba:
+        st.error("Indica un correo de destino para la prueba.")
+    else:
+        fila = df.iloc[fila_prueba - 1]
+        asunto_final, cuerpo_final = construir_asunto_y_cuerpo(fila)
+
+        nombre_pdf, pdf_bytes, ok_pdf = obtener_pdf_para_fila(fila_prueba)
+
+        if not ok_pdf:
+            st.error(f"No se encontró PDF para la fila {fila_prueba}. Nombre esperado: {nombre_pdf}")
+        else:
+            try:
+                msg = EmailMessage()
+                msg["Subject"] = asunto_final
+                msg["From"] = f"{from_name} <{from_email}>"
+                msg["To"] = correo_prueba
+                msg.set_content(cuerpo_final)
+
+                # Adjuntamos PDF
+                msg.add_attachment(
+                    pdf_bytes,
+                    maintype="application",
+                    subtype="pdf",
+                    filename=nombre_pdf
+                )
+
+                with smtplib.SMTP(smtp_host, smtp_port) as server:
+                    server.starttls()
+                    server.login(smtp_user, smtp_pass)
+                    server.send_message(msg)
+
+                st.success(f"Correo de prueba enviado a {correo_prueba} con adjunto {nombre_pdf}.")
+                st.code(f"Asunto: {asunto_final}\n\n{cuerpo_final}", language="text")
+
+            except Exception as e:
+                st.error(f"Error al enviar el correo de prueba: {e}")
 
