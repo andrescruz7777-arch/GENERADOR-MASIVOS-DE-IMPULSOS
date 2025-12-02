@@ -281,18 +281,38 @@ mapeo = st.session_state.mapeo_placeholders
 
 st.write("Con la configuración actual se generará un documento por cada fila de la base de datos.")
 
-# Pequeña ayuda para el nombre de archivo
-st.markdown("### Regla básica de nombres de archivo")
+# ------------------------
+# Regla de nombres de archivo personalizada
+# ------------------------
+st.markdown("### 🏷️ Nombre de archivo personalizado")
+
 st.caption(
-    "Por ahora usamos una regla simple: si existen columnas como RADICADO y DEMANDADO "
-    "las incluimos en el nombre. Si no, usamos un consecutivo."
+    "Define cómo se debe llamar cada documento generado. "
+    "Puedes usar texto y variables de la base entre llaves, ejemplo:\n"
+    "**Memorial_{{RADICADO}}_{{DEMANDADO}}.docx**"
 )
 
-col_a, col_b = st.columns(2)
-with col_a:
-    incluir_radicado = st.checkbox("Incluir RADICADO en el nombre (si existe)", value=True)
-with col_b:
-    incluir_demandado = st.checkbox("Incluir DEMANDADO en el nombre (si existe)", value=True)
+# Valor por defecto sugerido
+nombre_por_defecto = "Memorial_{{RADICADO}}_{{DEMANDADO}}.docx"
+
+if "regla_nombre_archivo" not in st.session_state:
+    st.session_state.regla_nombre_archivo = nombre_por_defecto
+
+regla_nombre = st.text_input(
+    "Escribe la regla del nombre del archivo:",
+    value=st.session_state.regla_nombre_archivo
+)
+
+st.session_state.regla_nombre_archivo = regla_nombre
+
+# Detectar placeholders dentro del nombre
+placeholders_nombre = re.findall(r"{{\s*([^}]+?)\s*}}", regla_nombre)
+
+if placeholders_nombre:
+    st.write("Variables detectadas en el nombre del archivo:")
+    st.write(placeholders_nombre)
+else:
+    st.info("No se detectaron variables {{...}} en el nombre. Se usará el mismo nombre para todos los archivos.")
 
 # Botón para generar documentos
 if st.button("▶️ Generar documentos .docx"):
