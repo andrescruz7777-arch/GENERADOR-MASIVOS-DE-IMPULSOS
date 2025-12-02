@@ -57,6 +57,9 @@ if "mapeo_placeholders" not in st.session_state:
 if "resultados_docx" not in st.session_state:
     st.session_state.resultados_docx = None
 
+if "regla_nombre_archivo" not in st.session_state:
+    st.session_state.regla_nombre_archivo = "Memorial_{{RADICADO}}_{{DEMANDADO}}.docx"
+
 col1, col2 = st.columns(2)
 
 # ------------------------
@@ -257,11 +260,11 @@ else:
         st.write(texto)
 
 # ------------------------
-# PASO 4: Generación de documentos .docx
+# PASO 4: Nombre de archivo + generación de .docx
 # ------------------------
 
 st.markdown("---")
-st.header("④ Generación de documentos (.docx)")
+st.header("④ Nombre de archivo y generación de documentos (.docx)")
 
 # Verificaciones previas
 if st.session_state.df_base is None or st.session_state.parrafos_plantilla is None:
@@ -292,17 +295,10 @@ st.caption(
     "**Memorial_{{RADICADO}}_{{DEMANDADO}}.docx**"
 )
 
-# Valor por defecto sugerido
-nombre_por_defecto = "Memorial_{{RADICADO}}_{{DEMANDADO}}.docx"
-
-if "regla_nombre_archivo" not in st.session_state:
-    st.session_state.regla_nombre_archivo = nombre_por_defecto
-
 regla_nombre = st.text_input(
     "Escribe la regla del nombre del archivo:",
     value=st.session_state.regla_nombre_archivo
 )
-
 st.session_state.regla_nombre_archivo = regla_nombre
 
 # Detectar placeholders dentro del nombre
@@ -312,9 +308,11 @@ if placeholders_nombre:
     st.write("Variables detectadas en el nombre del archivo:")
     st.write(placeholders_nombre)
 else:
-    st.info("No se detectaron variables {{...}} en el nombre. Se usará el mismo nombre para todos los archivos.")
+    st.info("No se detectaron variables {{...}} en el nombre. Se usará el mismo nombre para todos los archivos (consecutivo).")
 
+# ------------------------
 # Botón para generar documentos
+# ------------------------
 if st.button("▶️ Generar documentos .docx"):
     plantilla_bytes = st.session_state.plantilla_bytes
 
@@ -341,18 +339,25 @@ if st.button("▶️ Generar documentos .docx"):
         doc = DocxTemplate(BytesIO(plantilla_bytes))
         doc.render(contexto)
 
-        # Construimos el nombre del archivo
-        partes_nombre = ["doc"]
-        if incluir_radicado and "RADICADO" in df.columns:
-            partes_nombre.append(str(fila["RADICADO"]))
-        if incluir_demandado and "DEMANDADO" in df.columns:
-            partes_nombre.append(str(fila["DEMANDADO"]))
+        # --- Construcción del nombre de archivo basado en la regla definida ---
+        nombre_archivo = regla_nombre
 
-        # Si no tenemos nada extra, usamos el índice
-        if len(partes_nombre) == 1:
-            partes_nombre.append(str(idx))
+        # Reemplazamos placeholders de la regla con los datos de la fila
+        for ph, col in mapeo.items():
+            if col in df.columns:
+                valor = fila[col]
+                if pd.isna(valor):
+                    valor = ""
+                patron = r"{{\s*" + re.escape(ph) + r"\s*}}"
+                nombre_archivo = re.sub(patron, str(valor), nombre_archivo)
 
-        nombre_archivo = "_".join(partes_nombre) + ".docx"
+        # Si el usuario no incluyó .docx, lo agregamos
+        if not nombre_archivo.lower().endswith(".docx"):
+            nombre_archivo = nombre_archivo + ".docx"
+
+        # Si después de reemplazar quedó vacío o solo .docx, usamos un fallback
+        if nombre_archivo.strip() == ".docx":
+            nombre_archivo = f"documento_{idx}.docx"
 
         # Guardamos en un buffer temporal
         doc_buffer = BytesIO()
