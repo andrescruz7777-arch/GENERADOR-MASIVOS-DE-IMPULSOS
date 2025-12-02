@@ -524,7 +524,7 @@ if zip_pdfs is not None:
     st.session_state.pdf_zip_bytes = zip_bytes
     st.session_state.pdf_mapping = pdf_mapping
 # ------------------------
-# PASO 6: Configuración de correo y envío de prueba
+# PASO 6: Configuración de correo y envío de prueba (con CC y BCC)
 # ------------------------
 import smtplib
 from email.message import EmailMessage
@@ -549,21 +549,32 @@ smtp_host = st.text_input("Servidor SMTP (host):", value="smtp.gmail.com")
 smtp_port = st.number_input("Puerto SMTP:", value=587, step=1)
 smtp_user = st.text_input("Usuario / correo remitente:")
 smtp_pass = st.text_input("Contraseña / app password:", type="password")
-from_name = st.text_input("Nombre que verá el destinatario:", value="Área Judicial")
+from_name = st.text_input("Nombre visible del remitente:", value="Área Judicial")
 from_email = st.text_input("Correo FROM (si es distinto al usuario):", value="")
 
 if from_email.strip() == "":
     from_email = smtp_user
 
-st.caption("Usa un correo con permisos SMTP (por ejemplo, Gmail con app password o un buzón corporativo).")
+# ------------------------
+# Campos de destinatarios
+# ------------------------
+st.subheader("Plantilla de destinatarios (uso de variables {{...}})")
+
+st.caption("Puedes escribir correos fijos o usar variables como {{EMAIL}}, {{CORREO_DEMANDANTE}}, etc.")
+
+para_template = st.text_input("Para:", value="{{EMAIL}}")
+cc_template = st.text_input("Con copia (CC):", value="")
+bcc_template = st.text_input("Copia oculta (BCC):", value="")
+
+st.caption("Si quieres varios correos, sepáralos con coma: correo1@x.com, correo2@x.com")
 
 # ------------------------
 # Plantilla de correo (asunto y cuerpo)
 # ------------------------
-st.subheader("Plantilla de correo (uso de variables {{...}})")
+st.subheader("Plantilla de asunto y cuerpo")
 
 asunto_template = st.text_input(
-    "Asunto del correo (puedes usar {{RADICADO}}, {{DEMANDADO}}, etc.):",
+    "Asunto:",
     value="Memorial proceso {{RADICADO}} contra {{DEMANDADO}}"
 )
 
@@ -580,45 +591,29 @@ cuerpo_template = st.text_area(
     height=200
 )
 
-st.caption("Las variables funcionan igual que en la plantilla: se reemplazan con los datos de cada fila.")
-
 # ------------------------
-# Envío de prueba
+# Funciones internas
 # ------------------------
-st.subheader("Envío de prueba (solo un registro)")
-
-total_filas = len(df)
-fila_prueba = st.number_input(
-    "Fila de la base a usar para la prueba (1 = primera fila):",
-    min_value=1,
-    max_value=total_filas,
-    value=1,
-    step=1
-)
-
-correo_prueba = st.text_input("Enviar prueba a este correo:")
-
-def construir_asunto_y_cuerpo(fila):
-    texto_asunto = asunto_template
-    texto_cuerpo = cuerpo_template
-
-    # Reemplazamos usando columnas del DF (nombre de columna = placeholder)
+def reemplazar_variables(template_text, fila):
+    texto = template_text
     for col in df.columns:
-        ph = col  # asumimos placeholder igual al nombre de la columna
+        ph = col
         valor = fila[col]
         if pd.isna(valor):
             valor = ""
         patron = r"{{\s*" + re.escape(ph) + r"\s*}}"
-        texto_asunto = re.sub(patron, str(valor), texto_asunto)
-        texto_cuerpo = re.sub(patron, str(valor), texto_cuerpo)
+        texto = re.sub(patron, str(valor), texto)
+    return texto
 
-    return texto_asunto, texto_cuerpo
+def procesar_lista_correos(cadena):
+    if not cadena:
+        return []
+    lista = [c.strip() for c in cadena.split(",") if c.strip() != ""]
+    return lista
 
 def obtener_pdf_para_fila(idx_fila):
-    # idx_fila viene 1-based, mapping también
     esperado = None
     encontrado = False
-    nombre_zip = None
 
     for item in pdf_mapping:
         if item["fila"] == idx_fila:
@@ -629,7 +624,6 @@ def obtener_pdf_para_fila(idx_fila):
     if not encontrado or esperado is None:
         return None, None, False
 
-    # Abrimos el ZIP y extraemos ese archivo
     zf_pdf = zipfile.ZipFile(BytesIO(pdf_zip_bytes), "r")
     try:
         data = zf_pdf.read(esperado)
@@ -637,43 +631,77 @@ def obtener_pdf_para_fila(idx_fila):
     except KeyError:
         return esperado, None, False
 
-if st.button("📨 Enviar correo de prueba"):
+# ------------------------
+# Envío de prueba
+# ------------------------
+st.subheader("📨 Envío de prueba (una sola fila)")
+
+total_filas = len(df)
+fila_prueba = st.number_input(
+    "Fila a usar para la prueba:",
+    min_value=1,
+    max_value=total_filas,
+    value=1,
+    step=1
+)
+
+correo_prueba = st.text_input("Correo destino para la prueba (si no usas variables):")
+
+if st.button("➡️ Enviar correo de prueba"):
     if not smtp_host or not smtp_user or not smtp_pass:
-        st.error("Configura primero SMTP (host, usuario y contraseña).")
-    elif not correo_prueba:
-        st.error("Indica un correo de destino para la prueba.")
-    else:
-        fila = df.iloc[fila_prueba - 1]
-        asunto_final, cuerpo_final = construir_asunto_y_cuerpo(fila)
+        st.error("⚠️ Configura primero el servidor SMTP.")
+        st.stop()
 
-        nombre_pdf, pdf_bytes, ok_pdf = obtener_pdf_para_fila(fila_prueba)
+    fila = df.iloc[fila_prueba - 1]
 
-        if not ok_pdf:
-            st.error(f"No se encontró PDF para la fila {fila_prueba}. Nombre esperado: {nombre_pdf}")
-        else:
-            try:
-                msg = EmailMessage()
-                msg["Subject"] = asunto_final
-                msg["From"] = f"{from_name} <{from_email}>"
-                msg["To"] = correo_prueba
-                msg.set_content(cuerpo_final)
+    # Reemplazamos variables en PARA / CC / BCC
+    para_final = reemplazar_variables(para_template, fila)
+    cc_final = reemplazar_variables(cc_template, fila)
+    bcc_final = reemplazar_variables(bcc_template, fila)
 
-                # Adjuntamos PDF
-                msg.add_attachment(
-                    pdf_bytes,
-                    maintype="application",
-                    subtype="pdf",
-                    filename=nombre_pdf
-                )
+    # Si el usuario escribe un correo directo → lo usamos
+    if correo_prueba.strip() != "":
+        para_final = correo_prueba.strip()
 
-                with smtplib.SMTP(smtp_host, smtp_port) as server:
-                    server.starttls()
-                    server.login(smtp_user, smtp_pass)
-                    server.send_message(msg)
+    # Convertimos a listas de correos
+    para_list = procesar_lista_correos(para_final)
+    cc_list = procesar_lista_correos(cc_final)
+    bcc_list = procesar_lista_correos(bcc_final)
 
-                st.success(f"Correo de prueba enviado a {correo_prueba} con adjunto {nombre_pdf}.")
-                st.code(f"Asunto: {asunto_final}\n\n{cuerpo_final}", language="text")
+    if len(para_list) == 0:
+        st.error("No hay destinatarios en el campo PARA.")
+        st.stop()
 
-            except Exception as e:
-                st.error(f"Error al enviar el correo de prueba: {e}")
+    # Asunto y cuerpo finales
+    asunto_final = reemplazar_variables(asunto_template, fila)
+    cuerpo_final = reemplazar_variables(cuerpo_template, fila)
+
+    # Adjuntar PDF para esa fila
+    nombre_pdf, pdf_bytes, ok_pdf = obtener_pdf_para_fila(fila_prueba)
+
+    if not ok_pdf:
+        st.error(f"No se encontró PDF para la fila {fila_prueba}. Nombre esperado: {nombre_pdf}")
+        st.stop()
+
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = asunto_final
+        msg["From"] = f"{from_name} <{from_email}>"
+        msg["To"] = ", ".join(para_list)
+
+        if cc_list:
+            msg["Cc"] = ", ".join(cc_list)
+        if bcc_list:
+            msg["Bcc"] = ", ".join(bcc_list)
+
+        msg.set_content(cuerpo_final)
+
+        msg.add_attachment(
+            pdf_bytes,
+            maintype="application",
+            subtype="pdf",
+            filename=nombre_pdf
+        )
+
+        with smtplib.SM
 
