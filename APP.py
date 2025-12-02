@@ -114,60 +114,75 @@ else:
 
 st.info("En el siguiente paso vamos a empezar el marcado de campos (JUZGADO, DEMANDANTE, etc.) sobre esta plantilla.")
 # ------------------------
-# PASO 3: Marcado de campos
+# PASO 3: Marcado de campos (por placeholder {{...}})
 # ------------------------
+import re
 
 st.markdown("---")
-st.header("③ Marcado de campos en la plantilla")
+st.header("③ Marcado de campos en la plantilla (placeholders {{...}})")
 
 # Verificamos que ambos estén cargados
 if st.session_state.df_base is None or st.session_state.parrafos_plantilla is None:
     st.warning("Carga primero la base de datos y la plantilla.")
     st.stop()
 
-# Inicializamos estructura de mapeo si no existe
-if "mapeo_campos" not in st.session_state:
-    st.session_state.mapeo_campos = []
-
 df = st.session_state.df_base
 parrafos = st.session_state.parrafos_plantilla
 
-st.write("Selecciona qué párrafos quieres vincular a datos de la base.")
+# Diccionario global: nombre_placeholder -> columna_excel
+if "mapeo_placeholders" not in st.session_state:
+    st.session_state.mapeo_placeholders = {}
 
-# Listado editable de párrafos
+st.write(
+    "Detectamos variables dentro del texto con el formato {{NOMBRE}}. "
+    "Aquí puedes vincular cada variable a una columna de la base."
+)
+
 for idx, p in enumerate(parrafos):
+    # Buscar placeholders tipo {{ NOMBRE }} dentro del párrafo
+    placeholders = re.findall(r"{{\s*([^}]+?)\s*}}", p)
+
+    # Si no hay variables, no mostramos nada especial
+    if not placeholders:
+        continue
+
+    placeholders_unicos = sorted(set(placeholders))
+
     with st.expander(f"Párrafo {idx+1}"):
-        st.markdown(f"### Contenido del párrafo:")
+        st.markdown("### Contenido del párrafo:")
         st.write(p)
 
-        st.markdown("### Vincular este párrafo a un campo de la base:")
-        col = st.selectbox(
-            f"Selecciona el campo para el párrafo {idx+1}:",
-            options=["(No vincular)"] + list(df.columns),
-            key=f"select_parrafo_{idx}"
-        )
+        st.markdown("### Variables detectadas en este párrafo:")
 
-        if col != "(No vincular)":
-            # Guardar mapeo
-            mapeo = {
-                "parrafo_id": idx,
-                "texto_original": p,
-                "columna_excel": col,
-                "etiqueta_visual": col.replace("_", " ").title(),
-            }
+        for ph in placeholders_unicos:
+            # Valor actual si ya habíamos mapeado esta variable antes
+            valor_actual = st.session_state.mapeo_placeholders.get(ph, "(No vincular)")
 
-            # Actualizar si ya existía
-            actualizado = False
-            for i, m in enumerate(st.session_state.mapeo_campos):
-                if m["parrafo_id"] == idx:
-                    st.session_state.mapeo_campos[i] = mapeo
-                    actualizado = True
-                    break
+            opciones = ["(No vincular)"] + list(df.columns)
 
-            if not actualizado:
-                st.session_state.mapeo_campos.append(mapeo)
+            # Determinar índice por defecto del selectbox
+            if valor_actual in df.columns:
+                index_default = opciones.index(valor_actual)
+            else:
+                index_default = 0
 
-st.success("Mapeo actualizado correctamente.")
+            col_select = st.selectbox(
+                f"Vincular la variable '{{{{{ph}}}}}' a una columna de la base:",
+                options=opciones,
+                index=index_default,
+                key=f"ph_{idx}_{ph}"
+            )
+
+            # Actualizar mapeo global
+            if col_select != "(No vincular)":
+                st.session_state.mapeo_placeholders[ph] = col_select
+            else:
+                # Si el usuario elige "No vincular", la quitamos del diccionario (si existía)
+                if ph in st.session_state.mapeo_placeholders:
+                    del st.session_state.mapeo_placeholders[ph]
+
+st.markdown("### 📝 Resumen de variables vinculadas")
+st.write(st.session_state.mapeo_placeholders)
 
 st.markdown("### 📝 Resumen de campos vinculados")
 st.write(st.session_state.mapeo_campos)
