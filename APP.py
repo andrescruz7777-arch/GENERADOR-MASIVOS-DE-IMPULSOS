@@ -258,9 +258,8 @@ else:
 
         st.markdown(f"**Párrafo {i}:**")
         st.write(texto)
-
 # ------------------------
-# PASO 4: Nombre de archivo + generación de .docx
+# PASO 4: Nombre de archivo y generación de documentos (.docx)
 # ------------------------
 
 st.markdown("---")
@@ -307,8 +306,29 @@ placeholders_nombre = re.findall(r"{{\s*([^}]+?)\s*}}", regla_nombre)
 if placeholders_nombre:
     st.write("Variables detectadas en el nombre del archivo:")
     st.write(placeholders_nombre)
+
+    # Ver cuáles se pueden resolver (mapeo o columna directa) y cuáles no
+    resolvibles = []
+    no_resolvibles = []
+    for ph in placeholders_nombre:
+        if ph in mapeo or ph in df.columns:
+            resolvibles.append(ph)
+        else:
+            no_resolvibles.append(ph)
+
+    if resolvibles:
+        st.success(f"Variables que se pueden resolver con la base: {', '.join(resolvibles)}")
+    if no_resolvibles:
+        st.warning(
+            "Estas variables del nombre no tienen mapeo ni columna con el mismo nombre, "
+            "y por ahora quedarán vacías en el nombre: "
+            + ", ".join(no_resolvibles)
+        )
 else:
-    st.info("No se detectaron variables {{...}} en el nombre. Se usará el mismo nombre para todos los archivos (consecutivo).")
+    st.info(
+        "No se detectaron variables {{...}} en el nombre. "
+        "Se usará el mismo nombre para todos los archivos con un consecutivo."
+    )
 
 # ------------------------
 # Botón para generar documentos
@@ -342,21 +362,33 @@ if st.button("▶️ Generar documentos .docx"):
         # --- Construcción del nombre de archivo basado en la regla definida ---
         nombre_archivo = regla_nombre
 
-        # Reemplazamos placeholders de la regla con los datos de la fila
-        for ph, col in mapeo.items():
-            if col in df.columns:
+        # 1) Reemplazamos usando las variables del NOMBRE (placeholders_nombre)
+        for ph in placeholders_nombre:
+            # Decidimos de dónde sacar el valor de esta variable de nombre
+            if ph in mapeo and mapeo[ph] in df.columns:
+                col = mapeo[ph]
+            elif ph in df.columns:
+                col = ph
+            else:
+                col = None
+
+            if col is not None:
                 valor = fila[col]
                 if pd.isna(valor):
                     valor = ""
                 patron = r"{{\s*" + re.escape(ph) + r"\s*}}"
                 nombre_archivo = re.sub(patron, str(valor), nombre_archivo)
+            else:
+                # Si no hay columna/mapeo para esta variable del nombre, la dejamos vacía
+                patron = r"{{\s*" + re.escape(ph) + r"\s*}}"
+                nombre_archivo = re.sub(patron, "", nombre_archivo)
 
-        # Si el usuario no incluyó .docx, lo agregamos
+        # 2) Si el usuario no incluyó .docx, lo agregamos
         if not nombre_archivo.lower().endswith(".docx"):
             nombre_archivo = nombre_archivo + ".docx"
 
-        # Si después de reemplazar quedó vacío o solo .docx, usamos un fallback
-        if nombre_archivo.strip() == ".docx":
+        # 3) Si después de reemplazar quedó vacío o solo .docx, usamos un fallback
+        if nombre_archivo.strip() == ".docx" or nombre_archivo.strip() == "":
             nombre_archivo = f"documento_{idx}.docx"
 
         # Guardamos en un buffer temporal
