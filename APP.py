@@ -114,16 +114,17 @@ else:
 
 st.info("En el siguiente paso vamos a empezar el marcado de campos (JUZGADO, DEMANDANTE, etc.) sobre esta plantilla.")
 # ------------------------
-# PASO 3: Marcado de campos (por placeholder {{...}})
+# PASO 3: Marcado de campos ({{...}}) + previsualización
 # ------------------------
 import re
+import pandas as pd  # ya lo tienes arriba, pero no pasa nada si se repite
 
 st.markdown("---")
-st.header("③ Marcado de campos en la plantilla (placeholders {{...}})")
+st.header("③ Marcado de campos en la plantilla y previsualización")
 
 # Verificamos que ambos estén cargados
 if st.session_state.df_base is None or st.session_state.parrafos_plantilla is None:
-    st.warning("Carga primero la base de datos y la plantilla.")
+    st.warning("Carga primero la base de datos (Excel) y la plantilla (Word).")
     st.stop()
 
 df = st.session_state.df_base
@@ -138,15 +139,19 @@ st.write(
     "Aquí puedes vincular cada variable a una columna de la base."
 )
 
+# Para también poder avisar si hay placeholders sin mapear
+placeholders_detectados_global = set()
+
+# ---- Marcado de variables por párrafo ----
 for idx, p in enumerate(parrafos):
     # Buscar placeholders tipo {{ NOMBRE }} dentro del párrafo
     placeholders = re.findall(r"{{\s*([^}]+?)\s*}}", p)
 
-    # Si no hay variables, no mostramos nada especial
     if not placeholders:
         continue
 
     placeholders_unicos = sorted(set(placeholders))
+    placeholders_detectados_global.update(placeholders_unicos)
 
     with st.expander(f"Párrafo {idx+1}"):
         st.markdown("### Contenido del párrafo:")
@@ -182,8 +187,59 @@ for idx, p in enumerate(parrafos):
                     del st.session_state.mapeo_placeholders[ph]
 
 st.markdown("### 📝 Resumen de variables vinculadas")
-st.write(st.session_state.mapeo_placeholders)
 
-st.markdown("### 📝 Resumen de campos vinculados")
-st.write(st.session_state.mapeo_campos)
+if st.session_state.mapeo_placeholders:
+    st.write(st.session_state.mapeo_placeholders)
+else:
+    st.info("Aún no has vinculado ninguna variable {{...}} a columnas de la base.")
+
+# Aviso de variables detectadas pero no mapeadas
+no_mapeadas = placeholders_detectados_global.difference(st.session_state.mapeo_placeholders.keys())
+if no_mapeadas:
+    st.warning(
+        f"Estas variables fueron detectadas en la plantilla pero no están vinculadas a ninguna columna: "
+        f"{', '.join(sorted(no_mapeadas))}"
+    )
+
+# ------------------------
+# Previsualización con una fila de ejemplo
+# ------------------------
+st.markdown("---")
+st.subheader("👁️ Previsualización del documento con una fila de la base")
+
+if not st.session_state.mapeo_placeholders:
+    st.info("Primero vincula al menos una variable {{...}} a alguna columna para poder previsualizar.")
+else:
+    # Selector de fila de ejemplo
+    total_filas = len(df)
+    fila_idx = st.number_input(
+        "Selecciona el número de fila de la base para usar como ejemplo (1 = primera fila):",
+        min_value=1,
+        max_value=total_filas,
+        value=1,
+        step=1
+    )
+
+    fila = df.iloc[fila_idx - 1]
+
+    st.caption(f"Mostrando previsualización usando la fila {fila_idx} de {total_filas}.")
+
+    # Generar previsualización de cada párrafo
+    st.markdown("### Resultado previsualizado:")
+
+    for i, p in enumerate(parrafos, start=1):
+        texto = p
+
+        # Reemplazar cada placeholder mapeado por el valor correspondiente de la fila
+        for ph, col in st.session_state.mapeo_placeholders.items():
+            if col in df.columns:
+                valor = fila[col]
+                if pd.isna(valor):
+                    valor = ""
+                # Reemplazamos cualquier variante {{ NOMBRE }} / {{NOMBRE}} / {{   NOMBRE   }}
+                patron = r"{{\s*" + re.escape(ph) + r"\s*}}"
+                texto = re.sub(patron, str(valor), texto)
+
+        st.markdown(f"**Párrafo {i}:**")
+        st.write(texto)
 
