@@ -524,7 +524,7 @@ if zip_pdfs is not None:
     st.session_state.pdf_zip_bytes = zip_bytes
     st.session_state.pdf_mapping = pdf_mapping
 # ------------------------
-# PASO 6: Configuración de correo y envío de prueba (con CC y BCC)
+# PASO 6: Configuración de correo y envío de prueba (con CC / BCC y SSL/TLS)
 # ------------------------
 import smtplib
 from email.message import EmailMessage
@@ -547,29 +547,39 @@ st.subheader("Configuración SMTP (servidor de correo)")
 
 smtp_host = st.text_input("Servidor SMTP (host):", value="smtp.gmail.com")
 smtp_port = st.number_input("Puerto SMTP:", value=587, step=1)
+
+tipo_cifrado = st.selectbox(
+    "Método de cifrado:",
+    ["STARTTLS (puerto 587)", "SSL/TLS (puerto 465)"],
+    index=0
+)
+
 smtp_user = st.text_input("Usuario / correo remitente:")
 smtp_pass = st.text_input("Contraseña / app password:", type="password")
+
 from_name = st.text_input("Nombre visible del remitente:", value="Área Judicial")
 from_email = st.text_input("Correo FROM (si es distinto al usuario):", value="")
 
 if from_email.strip() == "":
     from_email = smtp_user
 
+
 # ------------------------
 # Campos de destinatarios
 # ------------------------
-st.subheader("Plantilla de destinatarios (uso de variables {{...}})")
+st.subheader("Plantilla de destinatarios (Para, CC y BCC)")
 
-st.caption("Puedes escribir correos fijos o usar variables como {{EMAIL}}, {{CORREO_DEMANDANTE}}, etc.")
+st.caption("Puedes usar variables {{EMAIL}}, {{CORREO_JUZGADO}}, {{ABOGADO_CORREO}}, etc.")
 
 para_template = st.text_input("Para:", value="{{EMAIL}}")
 cc_template = st.text_input("Con copia (CC):", value="")
 bcc_template = st.text_input("Copia oculta (BCC):", value="")
 
-st.caption("Si quieres varios correos, sepáralos con coma: correo1@x.com, correo2@x.com")
+st.caption("Puedes escribir varios correos separados por coma.")
+
 
 # ------------------------
-# Plantilla de correo (asunto y cuerpo)
+# Plantilla de correo
 # ------------------------
 st.subheader("Plantilla de asunto y cuerpo")
 
@@ -588,8 +598,9 @@ cuerpo_template = st.text_area(
         "{{ABOGADO}}\n"
         "{{TARJETA_PROFESIONAL}}"
     ),
-    height=200
+    height=220
 )
+
 
 # ------------------------
 # Funciones internas
@@ -631,6 +642,7 @@ def obtener_pdf_para_fila(idx_fila):
     except KeyError:
         return esperado, None, False
 
+
 # ------------------------
 # Envío de prueba
 # ------------------------
@@ -645,11 +657,12 @@ fila_prueba = st.number_input(
     step=1
 )
 
-correo_prueba = st.text_input("Correo destino para la prueba (si no usas variables):")
+correo_prueba = st.text_input("Correo destino para la prueba (si quieres ignorar las variables):")
+
 
 if st.button("➡️ Enviar correo de prueba"):
     if not smtp_host or not smtp_user or not smtp_pass:
-        st.error("⚠️ Configura primero el servidor SMTP.")
+        st.error("⚠️ Debes completar host, usuario y contraseña SMTP.")
         st.stop()
 
     fila = df.iloc[fila_prueba - 1]
@@ -659,28 +672,24 @@ if st.button("➡️ Enviar correo de prueba"):
     cc_final = reemplazar_variables(cc_template, fila)
     bcc_final = reemplazar_variables(bcc_template, fila)
 
-    # Si el usuario escribe un correo directo → lo usamos
     if correo_prueba.strip() != "":
         para_final = correo_prueba.strip()
 
-    # Convertimos a listas de correos
     para_list = procesar_lista_correos(para_final)
     cc_list = procesar_lista_correos(cc_final)
     bcc_list = procesar_lista_correos(bcc_final)
 
     if len(para_list) == 0:
-        st.error("No hay destinatarios en el campo PARA.")
+        st.error("No hay destinatarios válidos en PARA.")
         st.stop()
 
-    # Asunto y cuerpo finales
     asunto_final = reemplazar_variables(asunto_template, fila)
     cuerpo_final = reemplazar_variables(cuerpo_template, fila)
 
-    # Adjuntar PDF para esa fila
     nombre_pdf, pdf_bytes, ok_pdf = obtener_pdf_para_fila(fila_prueba)
 
     if not ok_pdf:
-        st.error(f"No se encontró PDF para la fila {fila_prueba}. Nombre esperado: {nombre_pdf}")
+        st.error(f"No se encontró PDF para la fila {fila_prueba}. Esperado: {nombre_pdf}")
         st.stop()
 
     try:
@@ -703,14 +712,24 @@ if st.button("➡️ Enviar correo de prueba"):
             filename=nombre_pdf
         )
 
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
+        # ---- SSL/TLS O STARTTLS ----
+        if "SSL/TLS" in tipo_cifrado:
+            # Modo Outlook / corporativos (puerto 465)
+            with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+        else:
+            # Modo Gmail y otros (puerto 587)
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
 
         st.success(
-            f"Correo de prueba enviado a: {para_list}. "
-            f"Con copia: {cc_list}. BCC: {bcc_list}."
+            f"Correo enviado correctamente.\n\n"
+            f"Para: {para_list}\n"
+            f"CC: {cc_list}\n"
+            f"BCC: {bcc_list}"
         )
 
         st.code(
@@ -719,5 +738,4 @@ if st.button("➡️ Enviar correo de prueba"):
         )
 
     except Exception as e:
-        st.error(f"❌ Error enviando correo: {e}")
-
+        st.error(f"❌ Error al enviar: {e}")
